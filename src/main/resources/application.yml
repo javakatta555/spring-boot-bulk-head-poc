@@ -1,0 +1,14 @@
+resilience4j.bulkhead:
+  instances:
+    ratingService:
+      maxWaitDuration: 3000
+      maxConcurrentCalls: 2
+
+
+resilience4j.thread-pool-bulkhead:
+  instances:
+    ratingService:
+      maxThreadPoolSize: 5
+      coreThreadPoolSize: 2
+      queueCapacity: 10
+      maxAliveDuration: 3000
