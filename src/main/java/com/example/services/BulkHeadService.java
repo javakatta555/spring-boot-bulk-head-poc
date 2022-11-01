@@ -21,44 +21,58 @@ import java.util.*;
 /*
 @Slf4j
 @Configuration
-@Component
 public class BulkHeadService {
 
     @Getter
     private Map<String, ThreadPoolBulkhead> threadPoolBulkheadMap = new HashMap<>();
 
+    @Autowired
+    private MongoConfig mongoConfig;
 
     @Autowired
-    private BulkHeadConfiguration bulkHeadConfiguration;
+    private RedissonClient redissonClient;
 
+    @Autowired
+    private CommonNotificationServiceFactory commonNotificationServiceFactory;
+
+    @Value("${env}")
+    private String env;
 
     @Bean(name = "threadPoolBulkheadMap")
     public Map<String, ThreadPoolBulkhead> populateThreadPoolBulkheadMap() {
-        //redisBulkheadEventListener(); //initializing listener
+        redisBulkheadEventListener(); //initializing listener
         return refreshThreadPoolBulkheadMap(); //initializing threadPoolBulkheadMap
     }
 
     public Map<String, ThreadPoolBulkhead> refreshThreadPoolBulkheadMap() {
         Map<String, ThreadPoolBulkhead> threadPoolBulkheadMap = new HashMap<>();
-        List<BulkHeadConfig> bulkHeadConfigList = bulkHeadConfiguration.getBulkHeadConfigList();
-        log.info("printing bulk head list :{}",bulkHeadConfigList);
+        MongoOperations mongoTemplate = mongoConfig.getMongoTemplate(MINTPRO_DB);
+        List<BulkHeadConfig> bulkHeadConfigList = mongoTemplate.findAll(BulkHeadConfig.class);
         bulkHeadConfigList.forEach(bulkHeadConfig -> {
             if (bulkHeadConfig.isActive())
                 threadPoolBulkheadMap.put(bulkHeadConfig.getId(), createThreadPoolBulkhead(bulkHeadConfig));
         });
         this.threadPoolBulkheadMap = threadPoolBulkheadMap;
-        log.info("final map"+threadPoolBulkheadMap);
         return threadPoolBulkheadMap;
     }
 
+    private void redisBulkheadEventListener() {
+        RTopic topic = redissonClient.getTopic(BULKHEAD);
+        topic.addListener(String.class, (channel, message) -> {
+            log.info("Bulkhead config update listener - " + message);
+            if (REFRESH_ALL.equalsIgnoreCase(message))
+                refreshThreadPoolBulkheadMap();
+            else
+                refresh(message);
+        });
+    }
 
-    public ThreadPoolBulkhead createThreadPoolBulkhead(BulkHeadConfig bulkHeadConfig) {
+    private ThreadPoolBulkhead createThreadPoolBulkhead(BulkHeadConfig bulkHeadConfig) {
         Duration keepAliveDuration = ThreadPoolBulkheadConfig.DEFAULT_KEEP_ALIVE_DURATION;
         if (bulkHeadConfig.getKeepAliveDuration() > 0)
             keepAliveDuration = Duration.ofMillis(bulkHeadConfig.getKeepAliveDuration());
         ThreadPoolBulkheadConfig config = ThreadPoolBulkheadConfig.custom()
                 .maxThreadPoolSize(bulkHeadConfig.getMaxThreadPool())
-                .coreThreadPoolSize(1)
                 .queueCapacity(bulkHeadConfig.getQueueCapacity())
                 .keepAliveDuration(keepAliveDuration)
                 .build();
@@ -66,6 +80,32 @@ public class BulkHeadService {
         return registry.bulkhead(bulkHeadConfig.getId());
     }
 
+    public void refresh(String bulkHeadName) {
+        MongoTemplate mongoTemplate = mongoConfig.getMongoTemplate(MINTPRO_DB);
+        BulkHeadConfig bulkHeadConfig = mongoTemplate.findById(bulkHeadName, BulkHeadConfig.class);
+        if (Objects.isNull(bulkHeadConfig))
+            return;
+        if (!bulkHeadConfig.isActive()) {
+            this.threadPoolBulkheadMap.remove(bulkHeadName);
+            return;
+        }
+        ThreadPoolBulkhead threadPoolBulkhead = createThreadPoolBulkhead(bulkHeadConfig);
+        this.threadPoolBulkheadMap.put(bulkHeadConfig.getId(), threadPoolBulkhead);
+    }
+
+    public void sendNotification(String message) {
+        RLock lock = redissonClient.getLock(message);
+        if (lock.isLocked())
+            return;
+        lock.lock(60, MINUTES);
+        Map<String, Object> data = new HashMap<>();
+        final String subject = String.format("[%s] Alert!! Issue in mintpro-be service", env);
+        data.put("message", "Few API's in mintpro-be are taking too much time to respond. Please check.");
+        data.put("errorMsg", message);
+        data.put("bulkheadList", getBulkheadList());
+        MintproFailureAlertEmail mintproFailureAlertEmail = new MintproFailureAlertEmail(commonNotificationServiceFactory, data, subject);
+        mintproFailureAlertEmail.send();
+    }
 
     private List<Map<String, Object>> getBulkheadList() {
         List<Map<String, Object>> bulkheadList = new ArrayList<>();
@@ -84,4 +124,3 @@ public class BulkHeadService {
     }
 
 }*/
-

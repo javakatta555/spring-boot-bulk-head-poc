@@ -47,9 +47,12 @@ public class OrderController {
 
             log.info("call processed finished ->" + Thread.currentThread().getName());
             threadPoolBulkhead.executeSupplier(supplier).toCompletableFuture().get();
+            log.info("Printing supplier.get()-->{}",supplier.get());
             return new Rating("1", "Stationary");
-        } catch (BulkheadFullException | InterruptedException | ExecutionException e) {
+        } catch (BulkheadFullException e) {
             log.error("[ratingService] Bulkhead Full {} -  : {} ", e.getClass().getSimpleName(), e.getMessage());
+        } catch (ExecutionException | InterruptedException e) {
+            throw new RuntimeException(e);
         }
         return null;
     }
